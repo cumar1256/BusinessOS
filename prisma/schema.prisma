@@ -1,0 +1,481 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+// ───────── Enums ─────────
+enum Role {
+  OWNER
+  MANAGER
+  CASHIER
+  ACCOUNTANT
+  HR_MANAGER
+  STOCK_KEEPER
+}
+enum Currency {
+  USD
+  SOS
+}
+enum Lang {
+  en
+  so
+}
+enum SaleStatus {
+  COMPLETED
+  VOIDED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  UNPAID
+}
+enum StockMoveType {
+  PURCHASE
+  SALE
+  RETURN_IN
+  RETURN_OUT
+  ADJUSTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  OPENING
+}
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+enum PayrollStatus {
+  DRAFT
+  APPROVED
+  PAID
+}
+
+// ───────── Tenancy & access ─────────
+model Business {
+  id            String   @id @default(cuid())
+  name          String
+  type          String   @default("retail") // retail, pharmacy, restaurant, wholesale, hotel, ...
+  slug          String   @unique
+  baseCurrency  Currency @default(USD)
+  timezone      String   @default("Africa/Mogadishu")
+  language      Lang     @default(en)
+  phone         String?
+  address       String?
+  logoUrl       String?
+  invoicePrefix String   @default("INV")
+  invoiceFooter String?
+  createdAt     DateTime @default(now())
+
+  memberships   Membership[]
+  branches      Branch[]
+  paymentMethods PaymentMethod[]
+  exchangeRates ExchangeRate[]
+  categories    Category[]
+  products      Product[]
+  stockMoves    StockMovement[]
+  customers     Customer[]
+  suppliers     Supplier[]
+  sales         Sale[]
+  purchases     Purchase[]
+  expenses      Expense[]
+  accounts      Account[]
+  journals      JournalEntry[]
+  employees     Employee[]
+  payrolls      Payroll[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  counters      Counter[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  memberships  Membership[]
+}
+
+model Membership {
+  id         String   @id @default(cuid())
+  userId     String
+  businessId String
+  role       Role
+  branchId   String?  // null = all branches
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@unique([userId, businessId])
+  @@index([businessId])
+}
+
+model Branch {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String
+  address    String?
+  phone      String?
+  isMain     Boolean  @default(false)
+  active     Boolean  @default(true)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  stockMoves StockMovement[]
+  sales      Sale[]
+  purchases  Purchase[]
+  expenses   Expense[]
+  employees  Employee[]
+  @@index([businessId])
+}
+
+model PaymentMethod {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String   // Cash, EVC Plus, Zaad, Sahal, Bank ...
+  kind       String   @default("mobile") // cash | mobile | bank | credit
+  accountId  String?  // ledger account this method settles into
+  active     Boolean  @default(true)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  payments   Payment[]
+  @@unique([businessId, name])
+}
+
+model ExchangeRate {
+  id         String   @id @default(cuid())
+  businessId String
+  from       Currency
+  to         Currency
+  rate       Decimal  @db.Decimal(18, 6)
+  effectiveAt DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@index([businessId, effectiveAt])
+}
+
+model Counter {
+  id         String @id @default(cuid())
+  businessId String
+  key        String // e.g. "invoice", "purchase"
+  value      Int    @default(0)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@unique([businessId, key])
+}
+
+// ───────── Catalog & stock ─────────
+model Category {
+  id         String @id @default(cuid())
+  businessId String
+  name       String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products   Product[]
+  @@unique([businessId, name])
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  businessId  String
+  categoryId  String?
+  sku         String
+  barcode     String?
+  name        String
+  unit        String   @default("pcs")
+  costPrice   Decimal  @db.Decimal(18, 2)
+  salePrice   Decimal  @db.Decimal(18, 2)
+  currency    Currency @default(USD)
+  trackStock  Boolean  @default(true)
+  reorderLevel Int     @default(5)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category    Category? @relation(fields: [categoryId], references: [id])
+  stockMoves  StockMovement[]
+  saleItems   SaleItem[]
+  purchaseItems PurchaseItem[]
+  @@unique([businessId, sku])
+  @@index([businessId, name])
+}
+
+// Source of truth for stock: on-hand = SUM(quantity) per product+branch.
+model StockMovement {
+  id         String   @id @default(cuid())
+  businessId String
+  branchId   String
+  productId  String
+  type       StockMoveType
+  quantity   Int      // signed: + in, - out
+  unitCost   Decimal? @db.Decimal(18, 2)
+  refType    String?  // Sale | Purchase | Return | Adjustment
+  refId      String?
+  note       String?
+  createdById String?
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+  @@index([businessId, productId, branchId])
+}
+
+// ───────── Parties ─────────
+model Customer {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String
+  phone      String?
+  address    String?
+  creditLimit Decimal @default(0) @db.Decimal(18, 2)
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  sales      Sale[]
+  @@index([businessId, name])
+}
+
+model Supplier {
+  id         String   @id @default(cuid())
+  businessId String
+  name       String
+  phone      String?
+  address    String?
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchases  Purchase[]
+  @@index([businessId, name])
+}
+
+// ───────── Sales ─────────
+model Sale {
+  id         String   @id @default(cuid())
+  businessId String
+  branchId   String
+  number     String
+  customerId String?
+  currency   Currency
+  subtotal   Decimal  @db.Decimal(18, 2)
+  discount   Decimal  @default(0) @db.Decimal(18, 2)
+  tax        Decimal  @default(0) @db.Decimal(18, 2)
+  total      Decimal  @db.Decimal(18, 2)
+  paid       Decimal  @default(0) @db.Decimal(18, 2)
+  cogs       Decimal  @default(0) @db.Decimal(18, 2)
+  status     SaleStatus @default(COMPLETED)
+  paymentStatus PaymentStatus @default(PAID)
+  createdById String
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  items      SaleItem[]
+  payments   Payment[]
+  returns    SaleReturn[]
+  @@unique([businessId, number])
+  @@index([businessId, createdAt])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  productId String
+  quantity  Int
+  unitPrice Decimal @db.Decimal(18, 2)
+  unitCost  Decimal @db.Decimal(18, 2)
+  discount  Decimal @default(0) @db.Decimal(18, 2)
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id         String   @id @default(cuid())
+  businessId String
+  saleId     String?
+  purchaseId String?
+  methodId   String
+  amount     Decimal  @db.Decimal(18, 2)
+  currency   Currency
+  reference  String?  // e.g. EVC transaction ID
+  direction  String   @default("IN") // IN (customer) | OUT (supplier/refund)
+  createdAt  DateTime @default(now())
+  method     PaymentMethod @relation(fields: [methodId], references: [id])
+  sale       Sale?     @relation(fields: [saleId], references: [id])
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+  @@index([businessId, createdAt])
+}
+
+model SaleReturn {
+  id        String   @id @default(cuid())
+  businessId String
+  saleId    String
+  amount    Decimal  @db.Decimal(18, 2)
+  reason    String?
+  itemsJson Json     // [{productId, quantity}]
+  createdAt DateTime @default(now())
+  sale      Sale     @relation(fields: [saleId], references: [id])
+  @@index([businessId, saleId])
+}
+
+// ───────── Purchases ─────────
+model Purchase {
+  id         String   @id @default(cuid())
+  businessId String
+  branchId   String
+  number     String
+  supplierId String
+  currency   Currency
+  total      Decimal  @db.Decimal(18, 2)
+  paid       Decimal  @default(0) @db.Decimal(18, 2)
+  paymentStatus PaymentStatus @default(UNPAID)
+  createdById String
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branch     Branch   @relation(fields: [branchId], references: [id])
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  items      PurchaseItem[]
+  payments   Payment[]
+  @@unique([businessId, number])
+}
+
+model PurchaseItem {
+  id         String  @id @default(cuid())
+  purchaseId String
+  productId  String
+  quantity   Int
+  unitCost   Decimal @db.Decimal(18, 2)
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product    Product  @relation(fields: [productId], references: [id])
+}
+
+// ───────── Accounting ─────────
+model Expense {
+  id         String   @id @default(cuid())
+  businessId String
+  branchId   String?
+  category   String
+  description String?
+  amount     Decimal  @db.Decimal(18, 2)
+  currency   Currency
+  paidFrom   String?  // PaymentMethod id
+  incurredAt DateTime @default(now())
+  createdById String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branch     Branch?  @relation(fields: [branchId], references: [id])
+  @@index([businessId, incurredAt])
+}
+
+model Account {
+  id         String      @id @default(cuid())
+  businessId String
+  code       String
+  name       String
+  type       AccountType
+  system     Boolean     @default(false)
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lines      JournalLine[]
+  @@unique([businessId, code])
+}
+
+model JournalEntry {
+  id         String   @id @default(cuid())
+  businessId String
+  date       DateTime @default(now())
+  memo       String
+  refType    String?
+  refId      String?
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  lines      JournalLine[]
+  @@index([businessId, date])
+  @@index([refType, refId])
+}
+
+// Amounts stored in business base currency (converted at posting time).
+model JournalLine {
+  id        String  @id @default(cuid())
+  entryId   String
+  accountId String
+  debit     Decimal @default(0) @db.Decimal(18, 2)
+  credit    Decimal @default(0) @db.Decimal(18, 2)
+  partyType String? // Customer | Supplier | Employee
+  partyId   String?
+  entry     JournalEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  account   Account      @relation(fields: [accountId], references: [id])
+  @@index([accountId])
+  @@index([partyType, partyId])
+}
+
+// ───────── HR ─────────
+model Employee {
+  id         String   @id @default(cuid())
+  businessId String
+  branchId   String?
+  name       String
+  phone      String?
+  position   String?
+  salary     Decimal  @db.Decimal(18, 2)
+  currency   Currency @default(USD)
+  hiredAt    DateTime @default(now())
+  active     Boolean  @default(true)
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  branch     Branch?  @relation(fields: [branchId], references: [id])
+  payslips   Payslip[]
+  attendance Attendance[]
+}
+
+model Attendance {
+  id         String   @id @default(cuid())
+  employeeId String
+  date       DateTime @db.Date
+  status     String   // PRESENT | ABSENT | LEAVE
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  @@unique([employeeId, date])
+}
+
+model Payroll {
+  id         String   @id @default(cuid())
+  businessId String
+  period     String   // 2026-11
+  status     PayrollStatus @default(DRAFT)
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  payslips   Payslip[]
+  @@unique([businessId, period])
+}
+
+model Payslip {
+  id         String  @id @default(cuid())
+  payrollId  String
+  employeeId String
+  gross      Decimal @db.Decimal(18, 2)
+  deductions Decimal @default(0) @db.Decimal(18, 2)
+  net        Decimal @db.Decimal(18, 2)
+  payroll    Payroll  @relation(fields: [payrollId], references: [id], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [id])
+}
+
+// ───────── System ─────────
+model Notification {
+  id         String   @id @default(cuid())
+  businessId String
+  userId     String?
+  kind       String   // LOW_STOCK | DEBT_DUE | ...
+  title      String
+  body       String?
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@index([businessId, read])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  businessId String
+  userId     String?
+  action     String   // e.g. sale.create
+  entity     String?
+  entityId   String?
+  meta       Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  @@index([businessId, createdAt])
+}

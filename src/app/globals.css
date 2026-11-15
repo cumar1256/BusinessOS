@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f4f6f7;
+  --surface: #ffffff;
+  --surface-2: #eef1f3;
+  --line: #dfe4e8;
+  --ink: #14212b;
+  --muted: #5d6c78;
+  --brand: #0b6b6f;          /* Indian Ocean teal */
+  --brand-ink: #ffffff;
+  --brand-soft: #dff0f0;
+  --accent: #d99a1e;         /* saffron, used sparingly */
+  --danger: #b42318;
+  --success: #067647;
+  --radius: 10px;
+}
+.dark {
+  --bg: #0d151b;
+  --surface: #131d25;
+  --surface-2: #1a2631;
+  --line: #243442;
+  --ink: #e8eef2;
+  --muted: #8fa1ae;
+  --brand: #3bb3b8;
+  --brand-ink: #06262a;
+  --brand-soft: #14363a;
+  --accent: #e8b04a;
+  --danger: #f97066;
+  --success: #47cd89;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-accent: var(--accent);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --font-sans: var(--font-figtree), ui-sans-serif, system-ui, sans-serif;
+}
+
+body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.num { font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
